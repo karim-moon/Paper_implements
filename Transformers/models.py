@@ -48,17 +48,17 @@ class MultiHeadAttention(nn.Module):
 
         self.num_heads = num_heads
 
-    def forward(self, sequence, mask=None):
-        residual = sequence
-        batch, seq_len, word_dim = sequence.size()
+    def forward(self, q, k, v, mask=None):
+        residual = q
+        batch, seq_len, word_dim = q.size()
 
-        query = self.query(sequence).view(batch,
+        query = self.query(q).view(batch,
                                           seq_len,
                                           self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
-        key = self.key(sequence).view(batch,
+        key = self.key(k).view(batch,
                                       seq_len,
                                       self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
-        value = self.value(sequence).view(batch,
+        value = self.value(v,).view(batch,
                                           seq_len,
                                           self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
         if mask:
@@ -74,12 +74,13 @@ class FeedForward(nn.Module):
         super(FeedForward, self).__init__()
         self.forward_net = nn.Linear(in_dim, out_dim)
         self.recall_net = nn.Linear(out_dim, in_dim)
+        self.relu = nn.ReLU()
         self.dropout = nn.Dropout(0.5)
 
     def __forward__(self, sequence):
-        forward = self.forward_net(sequence)
-        recall = self.dropout(self.recall_net(forward))
-        return recall
+        forward = self.relu(self.forward_net(sequence))
+        recall = self.relu(self.recall_net(forward))
+        return self.dropout(recall)
 
 
 class Encoder(nn.Module):
@@ -88,10 +89,12 @@ class Encoder(nn.Module):
         self.attention = MultiHeadAttention(in_dim, out_dim, num_heads)
         self.feed_forward = FeedForward(in_dim, out_dim)
 
-    def __forward__(self, embedding_vector):
-        after_attention_vector = self.attention(embedding_vector)
-        feed_forward_vector = self.feed_forward(after_attention_vector)
-        return feed_forward_vector
+    def __forward__(self, encoder_embedding):
+        after_attention_vector = self.attention(encoder_embedding,
+                                                encoder_embedding,
+                                                encoder_embedding)
+        encoder_output = self.feed_forward(after_attention_vector)
+        return encoder_output
 
 
 class Decoder(nn.Module):
@@ -103,14 +106,20 @@ class Decoder(nn.Module):
         self.encoder_decoder_attention = MultiHeadAttention(in_dim, out_dim, num_heads)
         self.encoder_decoder_forward = FeedForward(in_dim, out_dim)
 
-    def __forward__(self, encoder_output):
+    def __forward__(self, encoder_output, decoder_embedding):
         batch_size, seq_len, in_dim = encoder_output.size()
-        self_attention_output = self.self_output(encoder_output)
+        self_attention_output = self.self_output(decoder_embedding,
+                                                 decoder_embedding,
+                                                 decoder_embedding)
         feed_forward_output = self.self_forward(self_attention_output)
 
         mask = torch.ones(batch_size, seq_len, seq_len).tril()
-        encoder_decoder_att_output = self.encoder_decoder_attention(feed_forward_output, mask)
+        encoder_decoder_att_output = self.encoder_decoder_attention(decoder_embedding,
+                                                                    encoder_output,
+                                                                    encoder_output,
+                                                                    mask)
         feed_forward_output = self.encoder_decoder_forward(encoder_decoder_att_output)
+        return feed_forward_output
 
 
 
