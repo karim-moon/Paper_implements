@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import numpy as np
 
 
 class Embedding(nn.Module):
@@ -7,7 +8,7 @@ class Embedding(nn.Module):
         super(Embedding, self).__init__()
         self.embedding = nn.Embedding(vocab_size, in_dim)
 
-    def __forward__(self, word_vector):
+    def forward(self, word_vector):
         return self.embedding(word_vector)
 
 
@@ -18,13 +19,14 @@ class ScaledDotProduct(nn.Module):
 
     def __init__(self):
         super(ScaledDotProduct, self).__init__()
-        self.scale_attn_table = nn.Softmax()
+        self.scale_attn_table = nn.Softmax(-1)
 
     def forward(self, query, key, value, mask, d_k):
         if mask == None:
-            attention_table = ((query.matmul(key.transpose(1, 2)) / torch.sqrt(d_k)))
+            attention_table = ((query.matmul(key.transpose(2, 3)) / np.sqrt(d_k)))
         else:
-            attention_table = ((query.matmul(key.transpose(1, 2)) / torch.sqrt(d_k)) * mask)
+            attention_table = ((query.matmul(key.transpose(2, 3)) / np.sqrt(d_k)) * mask)
+            attention_table = torch.where(attention_table > 0, attention_table, torch.FloatTensor([-10000]))
 
         attention_score = self.scale_attn_table(attention_table)
         attention_out = attention_score.matmul(value)
@@ -63,8 +65,10 @@ class MultiHeadAttention(nn.Module):
                                           self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
         if mask:
             mask = mask.repeat(1, self.head_num, 1, 1)
-        attention_out = self.scaled_dot_product(query, key, value, mask)
-        output = self.word_dim_projection(attention_out.transpose(1, 2).view(batch, seq_len, -1))
+        d_k = query.size()[-1]
+        attention_out = self.scaled_dot_product(query, key, value, mask, d_k)
+        contiguous = attention_out.contiguous().transpose(1, 2).reshape(batch, seq_len, -1)
+        output = self.word_dim_projection(contiguous)
 
         return self.layer_norm(residual + output)
 
@@ -75,12 +79,11 @@ class FeedForward(nn.Module):
         self.forward_net = nn.Linear(in_dim, out_dim)
         self.recall_net = nn.Linear(out_dim, in_dim)
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.5)
 
-    def __forward__(self, sequence):
+    def forward(self, sequence):
         forward = self.relu(self.forward_net(sequence))
         recall = self.relu(self.recall_net(forward))
-        return self.dropout(recall)
+        return recall
 
 
 class Encoder(nn.Module):
@@ -89,7 +92,7 @@ class Encoder(nn.Module):
         self.attention = MultiHeadAttention(in_dim, out_dim, num_heads)
         self.feed_forward = FeedForward(in_dim, out_dim)
 
-    def __forward__(self, encoder_embedding):
+    def forward(self, encoder_embedding):
         after_attention_vector = self.attention(encoder_embedding,
                                                 encoder_embedding,
                                                 encoder_embedding)
@@ -106,7 +109,7 @@ class Decoder(nn.Module):
         self.encoder_decoder_attention = MultiHeadAttention(in_dim, out_dim, num_heads)
         self.encoder_decoder_forward = FeedForward(in_dim, out_dim)
 
-    def __forward__(self, encoder_output, decoder_embedding):
+    def forward(self, encoder_output, decoder_embedding):
         batch_size, seq_len, in_dim = encoder_output.size()
         self_attention_output = self.self_output(decoder_embedding,
                                                  decoder_embedding,
@@ -120,6 +123,7 @@ class Decoder(nn.Module):
                                                                     mask)
         feed_forward_output = self.encoder_decoder_forward(encoder_decoder_att_output)
         return feed_forward_output
+
 
 
 
