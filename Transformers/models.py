@@ -17,9 +17,10 @@ class ScaledDotProduct(nn.Module):
     torch Model Snippet
     """
 
-    def __init__(self):
+    def __init__(self, out_dim):
         super(ScaledDotProduct, self).__init__()
         self.scale_attn_table = nn.Softmax(-1)
+        self.layer_norm = nn.LayerNorm(out_dim)
 
     def forward(self, query, key, value, mask, d_k):
         if mask == None:
@@ -44,7 +45,7 @@ class MultiHeadAttention(nn.Module):
         self.query = nn.Linear(in_dim, num_heads * out_dim)
         self.key = nn.Linear(in_dim, num_heads * out_dim)
         self.value = nn.Linear(in_dim, num_heads * out_dim)
-        self.scaled_dot_product = ScaledDotProduct()
+        self.scaled_dot_product = ScaledDotProduct(out_dim)
         self.word_dim_projection = nn.Linear(num_heads * out_dim, in_dim)
         self.layer_norm = nn.LayerNorm(in_dim)
 
@@ -55,19 +56,19 @@ class MultiHeadAttention(nn.Module):
         batch, seq_len, word_dim = q.size()
 
         query = self.query(q).view(batch,
-                                          seq_len,
-                                          self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
+                                   seq_len,
+                                   self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
         key = self.key(k).view(batch,
-                                      seq_len,
-                                      self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
-        value = self.value(v,).view(batch,
-                                          seq_len,
-                                          self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
-        if mask:
-            mask = mask.repeat(1, self.head_num, 1, 1)
+                               seq_len,
+                               self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
+        value = self.value(v, ).view(batch,
+                                     seq_len,
+                                     self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
+        if mask is not None:
+            mask = mask.repeat(1, self.num_heads, 1, 1)
         d_k = query.size()[-1]
         attention_out = self.scaled_dot_product(query, key, value, mask, d_k)
-        contiguous = attention_out.contiguous().transpose(1, 2).reshape(batch, seq_len, -1)
+        contiguous = attention_out.transpose(1, 2).reshape(batch, seq_len, -1)
         output = self.word_dim_projection(contiguous)
 
         return self.layer_norm(residual + output)
@@ -111,18 +112,56 @@ class Decoder(nn.Module):
 
     def forward(self, encoder_output, decoder_embedding):
         batch_size, seq_len, in_dim = encoder_output.size()
-        self_attention_output = self.self_output(decoder_embedding,
+        self_attention_output = self.self_attention(decoder_embedding,
                                                  decoder_embedding,
                                                  decoder_embedding)
         feed_forward_output = self.self_forward(self_attention_output)
 
         mask = torch.ones(batch_size, seq_len, seq_len).tril()
-        encoder_decoder_att_output = self.encoder_decoder_attention(decoder_embedding,
+        encoder_decoder_att_output = self.encoder_decoder_attention(feed_forward_output,
                                                                     encoder_output,
                                                                     encoder_output,
                                                                     mask)
         feed_forward_output = self.encoder_decoder_forward(encoder_decoder_att_output)
         return feed_forward_output
+
+
+class Transformer(nn.Module):
+    def __init__(self, vocab_size, num_layers, num_heads, in_dim, out_dim):
+        super(Transformer, self).__init__()
+        self.embedding = Embedding(vocab_size, in_dim)
+
+        self.encoder_layers = nn.ModuleList(
+            [Encoder(in_dim, out_dim, num_heads)
+             for i in range(num_layers)]
+        )
+
+        self.decoder_layers = nn.ModuleList(
+            [Decoder(in_dim, out_dim, num_heads)
+             for i in range(num_layers)]
+        )
+
+        self.vocab_projection = nn.Linear(in_dim, vocab_size)
+
+    def forward(self, input_tokens, output_tokens=None):
+        embedded_input = self.embedding(input_tokens)
+        if output_tokens != None:
+            embedded_output = self.embedding(output_tokens)
+
+        for i, encoder_layer in enumerate(self.encoder_layers):
+            if i == 0:
+                encoded_token = encoder_layer(embedded_input)
+            else:
+                encoded_token = encoder_layer(encoded_token)
+
+        for i, decoder_layer in enumerate(self.decoder_layers):
+            if i == 0:
+                decoded_token = decoder_layer(encoded_token, embedded_output)
+            else:
+                decoded_token = decoder_layer(encoded_token, decoded_token)
+
+        output = self.vocab_projection(decoded_token)
+        return output
 
 
 
