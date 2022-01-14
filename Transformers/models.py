@@ -53,22 +53,23 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, q, k, v, mask=None):
         residual = q
-        batch, seq_len, word_dim = q.size()
+        batch, q_seq_len, q_word_dim = q.size()
+        _, kv_seq_len, kv_word_dim = k.size()
 
         query = self.query(q).view(batch,
-                                   seq_len,
+                                   q_seq_len,
                                    self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
         key = self.key(k).view(batch,
-                               seq_len,
+                               kv_seq_len,
                                self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
         value = self.value(v, ).view(batch,
-                                     seq_len,
+                                     kv_seq_len,
                                      self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
         if mask is not None:
             mask = mask.repeat(1, self.num_heads, 1, 1)
         d_k = query.size()[-1]
         attention_out = self.scaled_dot_product(query, key, value, mask, d_k)
-        contiguous = attention_out.transpose(1, 2).reshape(batch, seq_len, -1)
+        contiguous = attention_out.transpose(1, 2).reshape(batch, q_seq_len, -1)
         output = self.word_dim_projection(contiguous)
 
         return self.layer_norm(residual + output)
@@ -102,7 +103,7 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, in_dim, out_dim, num_heads):
+    def __init__(self, in_dim, out_dim, num_heads, teacher_forcing_rate=0.3):
         super(Decoder, self).__init__()
         self.self_attention = MultiHeadAttention(in_dim, out_dim, num_heads)
         self.self_forward = FeedForward(in_dim, out_dim)
@@ -110,26 +111,54 @@ class Decoder(nn.Module):
         self.encoder_decoder_attention = MultiHeadAttention(in_dim, out_dim, num_heads)
         self.encoder_decoder_forward = FeedForward(in_dim, out_dim)
 
-    def forward(self, encoder_output, decoder_embedding):
-        batch_size, seq_len, in_dim = encoder_output.size()
-        self_attention_output = self.self_attention(decoder_embedding,
-                                                 decoder_embedding,
-                                                 decoder_embedding)
-        feed_forward_output = self.self_forward(self_attention_output)
+        self.teacher_forcing_rate = teacher_forcing_rate
 
-        mask = torch.ones(batch_size, seq_len, seq_len).tril()
-        encoder_decoder_att_output = self.encoder_decoder_attention(feed_forward_output,
-                                                                    encoder_output,
-                                                                    encoder_output,
-                                                                    mask)
-        feed_forward_output = self.encoder_decoder_forward(encoder_decoder_att_output)
-        return feed_forward_output
+    def forward(self, encoder_output, decoder_embedding):
+        batch_size, seq_len, in_dim = decoder_embedding.size()
+        output = torch.zeros_like(decoder_embedding)
+
+        for seq_order in range(1, seq_len + 1):
+            mask = torch.ones(batch_size, seq_order, seq_order).tril()
+            self_attention_input = decoder_embedding[:, :seq_order, :]
+            self_attention_output = self.self_attention(self_attention_input,
+                                                        self_attention_input,
+                                                        self_attention_input,
+                                                        mask)
+
+            feed_forward_output = self.self_forward(self_attention_output)
+
+            encoder_decoder_att_output = self.encoder_decoder_attention(feed_forward_output,
+                                                                        encoder_output,
+                                                                        encoder_output,
+                                                                        )
+            feed_forward_output = self.encoder_decoder_forward(encoder_decoder_att_output)
+
+            if torch.rand(1) < self.teacher_forcing_rate:
+                continue
+            else:
+                if seq_order == 100:
+                    output[:, seq_order - 1, :] = feed_forward_output[:, -1, :]
+                else:
+                    decoder_embedding[:, seq_order, :] = feed_forward_output[:, -1, :]
+                    output[:, seq_order - 1, :] = feed_forward_output[:, -1, :]
+
+        return output
 
 
 class Transformer(nn.Module):
-    def __init__(self, vocab_size, num_layers, num_heads, in_dim, out_dim):
+    def __init__(self, vocab_size, num_layers, num_heads, in_dim,
+                 out_dim, is_same_domain=True, input_vocab_size=None, output_vocab_size=None):
         super(Transformer, self).__init__()
-        self.embedding = Embedding(vocab_size, in_dim)
+
+        if is_same_domain:
+
+            assert (input_vocab_size is None or output_vocab_size is None), \
+                'setting is same domain but you have input_vocab or output_vocab'
+            self.embedding = Embedding(vocab_size, in_dim)
+
+        else:
+            self.encoder_embedding = Embedding(vocab_size, in_dim)
+            self.decoder_embedding = Embedding(vocab_size, in_dim)
 
         self.encoder_layers = nn.ModuleList(
             [Encoder(in_dim, out_dim, num_heads)
@@ -142,12 +171,18 @@ class Transformer(nn.Module):
         )
 
         self.vocab_projection = nn.Linear(in_dim, vocab_size)
+        self.is_same_domain = is_same_domain
 
     def forward(self, input_tokens, output_tokens=None):
-        embedded_input = self.embedding(input_tokens)
-        if output_tokens != None:
+        # embedding
+        if self.is_same_domain:
+            embedded_input = self.embedding(input_tokens)
+            embedded_output = self.embedding(output_tokens)
+        else:
+            embedded_input = self.encoder_embedding(input_tokens)
             embedded_output = self.embedding(output_tokens)
 
+        # encoding
         for i, encoder_layer in enumerate(self.encoder_layers):
             if i == 0:
                 encoded_token = encoder_layer(embedded_input)
@@ -162,7 +197,3 @@ class Transformer(nn.Module):
 
         output = self.vocab_projection(decoded_token)
         return output
-
-
-
-
