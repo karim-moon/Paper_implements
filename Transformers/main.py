@@ -13,7 +13,6 @@ import re
 from tqdm.auto import tqdm
 
 from data import WordHandler, ChitChatDataset
-from models import Transformer
 from utils import make_utterances, make_vocab
 from train import Trainer
 
@@ -55,7 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default='../dataset/ChatbotData.csv',
                         help='root directory of the dataset')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate')
-    parser.add_argument('--cuda', action='store_true', help='use GPU computation')
+    parser.add_argument('--cuda', action='store_true', help='use GPU csomputation')
     opt = parser.parse_args()
 
 
