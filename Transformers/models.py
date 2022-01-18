@@ -23,11 +23,12 @@ class ScaledDotProduct(nn.Module):
         self.layer_norm = nn.LayerNorm(out_dim)
 
     def forward(self, query, key, value, mask, d_k):
+        device = query.device
         if mask == None:
             attention_table = ((query.matmul(key.transpose(2, 3)) / np.sqrt(d_k)))
         else:
             attention_table = ((query.matmul(key.transpose(2, 3)) / np.sqrt(d_k)) * mask)
-            attention_table = torch.where(attention_table > 0, attention_table, torch.FloatTensor([-10000]))
+            attention_table = torch.where(attention_table > 0, attention_table, torch.FloatTensor([-10000]).to(device))
 
         attention_score = self.scale_attn_table(attention_table)
         attention_out = attention_score.matmul(value)
@@ -55,6 +56,7 @@ class MultiHeadAttention(nn.Module):
         residual = q
         batch, q_seq_len, q_word_dim = q.size()
         _, kv_seq_len, kv_word_dim = k.size()
+        device = q.device
 
         query = self.query(q).view(batch,
                                    q_seq_len,
@@ -66,7 +68,7 @@ class MultiHeadAttention(nn.Module):
                                      kv_seq_len,
                                      self.num_heads, -1).transpose(1, 2)  # [batch, num_heads, seq_len, word_dim]
         if mask is not None:
-            mask = mask.repeat(1, self.num_heads, 1, 1)
+            mask = mask.repeat(1, self.num_heads, 1, 1).to(device)
         d_k = query.size()[-1]
         attention_out = self.scaled_dot_product(query, key, value, mask, d_k)
         contiguous = attention_out.transpose(1, 2).reshape(batch, q_seq_len, -1)
@@ -118,7 +120,7 @@ class Decoder(nn.Module):
         output = torch.zeros_like(decoder_embedding)
 
         for seq_order in range(1, seq_len + 1):
-            mask = torch.ones(batch_size, seq_order, seq_order).tril()
+            mask = torch.ones(batch_size, 1, seq_order, seq_order).tril()
             self_attention_input = decoder_embedding[:, :seq_order, :]
             self_attention_output = self.self_attention(self_attention_input,
                                                         self_attention_input,
@@ -136,7 +138,7 @@ class Decoder(nn.Module):
             if torch.rand(1) < self.teacher_forcing_rate:
                 continue
             else:
-                if seq_order == 100:
+                if seq_order == 64:
                     output[:, seq_order - 1, :] = feed_forward_output[:, -1, :]
                 else:
                     decoder_embedding[:, seq_order, :] = feed_forward_output[:, -1, :]
