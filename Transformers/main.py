@@ -1,16 +1,5 @@
 import argparse
-
 import torch
-from torch import nn
-from torch.utils.data import Dataset, DataLoader
-from torch.optim import Adam
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from torch import optim
-import re
-from tqdm.auto import tqdm
 
 from data import WordHandler, ChitChatDataset
 from utils import make_utterances, make_vocab
