@@ -1,8 +1,5 @@
 from models import Transformer
-from data import WordHandler, ChitChatDataset
-from torch.optim import Adam
-from utils import make_utterances, make_vocab
-from konlpy.tag import Mecab
+from transformers import AdamW
 
 from torch.utils.data import DataLoader
 from torch import nn
@@ -27,23 +24,9 @@ class Trainer(object):
 
 
     def train(self):
-        # total_utterances, question, answer = make_utterances(self.data_path)
-        # pos_tagger = Mecab()  # konlpy의 대표적인 형태소 분석기 mecab
-        #
-        # vocab = make_vocab(total_utterances, pos_tagger)
-        #
-        # self.token2index = {token: index for index, token in enumerate(vocab)}
-        # self.index2token = {index: token for index, token in enumerate(vocab)}
-        #
-        # self.handler = WordHandler(vocab, pos_tagger, self.token2index, self.index2toke)
-        #
-        # input_ids = question.map(self.handler.encode)
-        # output_ids = answer.map(self.handler.encode)
-        #
-        # chitchat_data = ChitChatDataset(input_ids, output_ids, self.index2toke, self.token2index, 60)
         chichat_dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
         criterion = nn.CrossEntropyLoss()
-        optimizer = Adam(self.model.parameters(), self.lr)
+        optimizer = AdamW(self.model.parameters(), self.lr)
         model = self.model.to(self.device)
 
         step = 0
